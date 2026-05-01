@@ -1,0 +1,36 @@
+# Smithery deployment config for agent-marketplace-mcp
+# https://smithery.ai/docs/build/deployments
+
+runtime: typescript
+startCommand:
+  type: stdio
+  command: node
+  args: ["bin/agent-marketplace-mcp.js"]
+configSchema:
+  type: object
+  properties:
+    AGENT_MARKETPLACE_URL:
+      type: string
+      title: Proxy URL
+      description: Base URL of the agent-marketplace-proxy. Defaults to the hosted instance.
+      default: https://agent-marketplace-proxy.vercel.app
+    X402_NETWORK:
+      type: string
+      title: x402 Network
+      enum: [base, base-sepolia]
+      default: base
+    AGENT_MARKETPLACE_WALLET_DIR:
+      type: string
+      title: Local wallet directory
+      description: Where to store the auto-generated hot wallet (default ~/.agent-marketplace).
+    CDP_API_KEY_ID:
+      type: string
+      title: Coinbase CDP API Key ID (optional, opt-in to CDP-managed wallet)
+    CDP_API_KEY_SECRET:
+      type: string
+      title: Coinbase CDP API Secret (optional)
+      format: password
+    CDP_WALLET_SECRET:
+      type: string
+      title: Coinbase CDP Wallet Secret (optional)
+      format: password
