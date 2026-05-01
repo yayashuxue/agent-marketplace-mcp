@@ -164,8 +164,11 @@ server.tool(
         ? "CDP (Coinbase-managed key)"
         : `local (key at ${WALLET_FILE}, chmod 600)`;
       const fundHint = NETWORK === "base-sepolia"
-        ? "Free testnet USDC: https://faucet.circle.com (Base Sepolia)."
-        : "Easiest: buy USDC on Coinbase, withdraw on the Base network to the address above.";
+        ? `Free testnet USDC: <https://faucet.circle.com> (Base Sepolia).`
+        : `Fund with Apple Pay / card (no Coinbase account needed):
+  Stripe Onramp: <https://crypto.link.com/?destination_currency=usdc&destination_network=base&destination_address=${account.address}>
+  Coinbase Pay:  <https://pay.coinbase.com/buy/select-asset?addresses=%7B%22${account.address}%22%3A%5B%22base%22%5D%7D&assets=%5B%22USDC%22%5D>
+Or transfer existing USDC on Base to the address above.`;
       const backupHint = mode === "local"
         ? `\nBackup: copy ${WALLET_FILE} somewhere safe. This is a hot wallet — keep balance small ($1–$10).`
         : "";
