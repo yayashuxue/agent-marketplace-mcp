@@ -3,6 +3,10 @@
 **One-line install: a Google SERP tool for Claude / Cursor / any MCP agent. Free trial out of the box; for production volume, your wallet is managed by Coinbase — you only ever fund USDC, you never see a private key.**
 
 ```bash
+# Option A — direct from GitHub (works today, no npm publish needed)
+claude mcp add agent-marketplace -- npx -y github:yayashuxue/agent-marketplace-mcp
+
+# Option B — once published to npm
 claude mcp add agent-marketplace -- npx -y agent-marketplace-mcp
 ```
 
