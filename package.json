@@ -1,0 +1,39 @@
+{
+  "name": "agent-marketplace-mcp",
+  "version": "0.1.0",
+  "description": "MCP server: x402-paid Google SERP + free trial. Uses Coinbase Developer Platform (CDP) wallet — users only fund USDC, never touch private keys.",
+  "type": "module",
+  "bin": {
+    "agent-marketplace-mcp": "bin/agent-marketplace-mcp.js"
+  },
+  "files": [
+    "bin/",
+    "README.md"
+  ],
+  "keywords": [
+    "mcp",
+    "x402",
+    "coinbase",
+    "cdp",
+    "serp",
+    "agent",
+    "claude",
+    "cursor"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yayashuxue/agent-marketplace-mcp"
+  },
+  "homepage": "https://github.com/yayashuxue/agent-marketplace-mcp#readme",
+  "license": "MIT",
+  "dependencies": {
+    "@coinbase/cdp-sdk": "^1.48.2",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "viem": "^2.48.6",
+    "x402-fetch": "^1.2.0",
+    "zod": "^3.25.76"
+  }
+}
