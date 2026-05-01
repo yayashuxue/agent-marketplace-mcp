@@ -104,7 +104,7 @@ async function usdcBalance(address) {
   }
 }
 
-const server = new McpServer({ name: "agent-marketplace", version: "0.2.0" });
+const server = new McpServer({ name: "agent-marketplace", version: "0.3.0" });
 
 server.tool(
   "search_try",
@@ -165,10 +165,9 @@ server.tool(
         : `local (key at ${WALLET_FILE}, chmod 600)`;
       const fundHint = NETWORK === "base-sepolia"
         ? `Free testnet USDC: <https://faucet.circle.com> (Base Sepolia).`
-        : `Fund with Apple Pay / card (no Coinbase account needed):
-  Stripe Onramp: <https://crypto.link.com/?destination_currency=usdc&destination_network=base&destination_address=${account.address}>
-  Coinbase Pay:  <https://pay.coinbase.com/buy/select-asset?addresses=%7B%22${account.address}%22%3A%5B%22base%22%5D%7D&assets=%5B%22USDC%22%5D>
-Or transfer existing USDC on Base to the address above.`;
+        : `Fund in 30 seconds with Apple Pay (one click — opens our hosted page, no signup):
+  ${PROXY_URL}/fund?addr=${account.address}&amount=10
+Or transfer existing USDC on Base directly to the address above.`;
       const backupHint = mode === "local"
         ? `\nBackup: copy ${WALLET_FILE} somewhere safe. This is a hot wallet — keep balance small ($1–$10).`
         : "";

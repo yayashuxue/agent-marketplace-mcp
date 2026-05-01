@@ -1,6 +1,6 @@
 {
   "name": "agent-marketplace-mcp",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "MCP server: x402-paid Google SERP + free trial. Auto-generates a local hot wallet on first run — users just fund USDC. Optional CDP-managed mode for teams.",
   "type": "module",
   "bin": {
