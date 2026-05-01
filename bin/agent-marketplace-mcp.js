@@ -165,9 +165,9 @@ server.tool(
         : `local (key at ${WALLET_FILE}, chmod 600)`;
       const fundHint = NETWORK === "base-sepolia"
         ? `Free testnet USDC: <https://faucet.circle.com> (Base Sepolia).`
-        : `Fund in 30 seconds with Apple Pay (one click — opens our hosted page, no signup):
-  ${PROXY_URL}/fund?addr=${account.address}&amount=10
-Or transfer existing USDC on Base directly to the address above.`;
+        : `Fund with Apple Pay (Coinbase Onramp guest checkout — email + card, no ID for first $500):
+  ${PROXY_URL}/fund?addr=${account.address}&amount=5
+Or transfer existing USDC on Base directly to the address above (zero KYC).`;
       const backupHint = mode === "local"
         ? `\nBackup: copy ${WALLET_FILE} somewhere safe. This is a hot wallet — keep balance small ($1–$10).`
         : "";
