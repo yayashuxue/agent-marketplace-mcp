@@ -19,18 +19,12 @@ configSchema:
       title: x402 Network
       enum: [base, base-sepolia]
       default: base
-    AGENT_MARKETPLACE_WALLET_DIR:
+    AGENT_MARKETPLACE_CONFIG_DIR:
       type: string
-      title: Local wallet directory
-      description: Where to store the auto-generated hot wallet (default ~/.agent-marketplace).
-    CDP_API_KEY_ID:
+      title: Local session directory
+      description: Where to store the spender session file (default ~/.agent-marketplace).
+    AGENT_MARKETPLACE_SPENDER_KEY:
       type: string
-      title: Coinbase CDP API Key ID (optional, opt-in to CDP-managed wallet)
-    CDP_API_KEY_SECRET:
-      type: string
-      title: Coinbase CDP API Secret (optional)
-      format: password
-    CDP_WALLET_SECRET:
-      type: string
-      title: Coinbase CDP Wallet Secret (optional)
+      title: Spender private key (headless / CI)
+      description: 0x-prefixed 32-byte hex. Bypasses wallet_connect when set.
       format: password

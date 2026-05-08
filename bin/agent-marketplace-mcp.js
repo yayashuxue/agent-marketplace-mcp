@@ -1,34 +1,36 @@
 #!/usr/bin/env node
 // agent-marketplace-mcp — MCP server exposing agent-marketplace-proxy as Claude/Cursor tools.
 //
-// Wallet model: CDP-managed (Coinbase Developer Platform).
-//   - Private key lives in Coinbase's MPC enclave, never on the user's disk.
-//   - The user holds CDP API credentials (api key id + secret + wallet secret) in
-//     ~/.agent-marketplace/config.json (chmod 600). Those credentials authorize signing
-//     but are not signing keys themselves.
-//   - First-run flow: user calls the `wallet_setup` tool, which prompts for the three
-//     CDP secrets, creates a server-side EVM wallet, and persists config.
-//   - Headless / CI: set CDP_API_KEY_ID + CDP_API_KEY_SECRET + CDP_WALLET_SECRET env vars;
-//     the tool resolves env first, file second.
+// Wallet model (v2 — Base Account + Spend Permission, no CDP signup):
+//   - User opens a hosted setup page in their browser.
+//   - The page generates a fresh "spender" EOA (private key never leaves the browser tab),
+//     prompts the user to connect their Base Account (Coinbase Smart Wallet) with passkey,
+//     and grants a SpendPermission scoped to USDC, $20 over 30 days.
+//   - The page POSTs the spender privkey + permission JSON to a one-shot localhost listener
+//     this MCP starts on demand. We persist to ~/.agent-marketplace/session.json (chmod 600).
+//   - Searches sign x402 EIP-3009 transferWithAuthorization with the spender key — the
+//     facilitator submits on-chain, so the spender wallet never needs ETH for gas.
+//   - User retains control via the hosted dashboard at /wallet (revoke, view balance).
 //
 // Free tier (`search_try`) works without any wallet setup.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod/v3";
-import { createWalletClient, http, createPublicClient, formatUnits } from "viem";
-import { toAccount } from "viem/accounts";
+import { createWalletClient, http, createPublicClient, formatUnits, isAddress, isHex } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
 import { wrapFetchWithPayment } from "x402-fetch";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { createServer } from "node:http";
 
 const PROXY_URL = process.env.AGENT_MARKETPLACE_URL || "https://agent-marketplace-proxy.vercel.app";
 const NETWORK = process.env.X402_NETWORK || "base";
-const DEFAULT_ACCOUNT_NAME = process.env.AGENT_MARKETPLACE_ACCOUNT || "agent-marketplace-buyer";
 const CONFIG_DIR = process.env.AGENT_MARKETPLACE_CONFIG_DIR || join(homedir(), ".agent-marketplace");
-const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+const SESSION_FILE = join(CONFIG_DIR, "session.json");
+const CALLBACK_TIMEOUT_MS = 5 * 60 * 1000; // 5 min for the user to complete setup
 
 // USDC contract addresses on Base
 const USDC = {
@@ -52,65 +54,38 @@ class SetupRequiredError extends Error {
   }
 }
 
-function readConfig() {
-  if (!existsSync(CONFIG_FILE)) return null;
+function readSession() {
+  if (!existsSync(SESSION_FILE)) return null;
   try {
-    const mode = statSync(CONFIG_FILE).mode & 0o777;
+    const mode = statSync(SESSION_FILE).mode & 0o777;
     if (mode !== 0o600) {
-      console.error(`[agent-marketplace-mcp] warn: ${CONFIG_FILE} mode is ${mode.toString(8)}, expected 600.`);
+      console.error(`[agent-marketplace-mcp] warn: ${SESSION_FILE} mode is ${mode.toString(8)}, expected 600.`);
     }
   } catch {}
-  return JSON.parse(readFileSync(CONFIG_FILE, "utf8"));
+  return JSON.parse(readFileSync(SESSION_FILE, "utf8"));
 }
 
-function writeConfig(config) {
+function writeSession(session) {
   if (!existsSync(CONFIG_DIR)) {
     mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   }
-  writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 });
-  chmodSync(CONFIG_FILE, 0o600);
-}
-
-function resolveCreds() {
-  const fromEnv = {
-    cdpApiKeyId: process.env.CDP_API_KEY_ID,
-    cdpApiKeySecret: process.env.CDP_API_KEY_SECRET,
-    cdpWalletSecret: process.env.CDP_WALLET_SECRET,
-  };
-  const fromFile = readConfig() || {};
-  const creds = {
-    cdpApiKeyId: fromEnv.cdpApiKeyId || fromFile.cdpApiKeyId,
-    cdpApiKeySecret: fromEnv.cdpApiKeySecret || fromFile.cdpApiKeySecret,
-    cdpWalletSecret: fromEnv.cdpWalletSecret || fromFile.cdpWalletSecret,
-    accountName: fromFile.accountName || DEFAULT_ACCOUNT_NAME,
-    cachedAddress: fromFile.address,
-  };
-  if (!creds.cdpApiKeyId || !creds.cdpApiKeySecret || !creds.cdpWalletSecret) {
-    throw new SetupRequiredError(
-      "Wallet not configured. Call the `wallet_setup` tool with your CDP API credentials, " +
-      "or set CDP_API_KEY_ID + CDP_API_KEY_SECRET + CDP_WALLET_SECRET env vars (headless mode).",
-    );
-  }
-  return creds;
+  writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2), { mode: 0o600 });
+  chmodSync(SESSION_FILE, 0o600);
 }
 
 async function ensureWallet() {
   if (_fetchWithPay) return { fetchWithPay: _fetchWithPay, account: _account };
-  const creds = resolveCreds();
-  const { CdpClient } = await import("@coinbase/cdp-sdk");
-  const cdp = new CdpClient({
-    apiKeyId: creds.cdpApiKeyId,
-    apiKeySecret: creds.cdpApiKeySecret,
-    walletSecret: creds.cdpWalletSecret,
-  });
-  const cdpAccount = await cdp.evm.getOrCreateAccount({ name: creds.accountName });
-  _account = toAccount({
-    address: cdpAccount.address,
-    sign: cdpAccount.sign,
-    signMessage: cdpAccount.signMessage,
-    signTransaction: cdpAccount.signTransaction,
-    signTypedData: cdpAccount.signTypedData,
-  });
+  // Allow env-var override for headless / CI: AGENT_MARKETPLACE_SPENDER_KEY.
+  const envKey = process.env.AGENT_MARKETPLACE_SPENDER_KEY;
+  const session = readSession();
+  const privKey = envKey || session?.spenderPrivKey;
+  if (!privKey || !isHex(privKey) || privKey.length !== 66) {
+    throw new SetupRequiredError(
+      "Wallet not configured. Run the `wallet_connect` tool to authorize a spender via your Base Account, " +
+      "or set AGENT_MARKETPLACE_SPENDER_KEY env var (headless mode).",
+    );
+  }
+  _account = privateKeyToAccount(privKey);
   _walletClient = createWalletClient({ account: _account, chain: chain(), transport: http() });
   _fetchWithPay = wrapFetchWithPayment(fetch, _walletClient);
   return { fetchWithPay: _fetchWithPay, account: _account };
@@ -131,7 +106,51 @@ async function usdcBalance(address) {
   }
 }
 
-const server = new McpServer({ name: "agent-marketplace", version: "1.0.0" });
+// Start a one-shot localhost listener on a free ephemeral port. Returns
+// { port, awaitSession } — the caller can print the URL synchronously, then await
+// the user-completed setup. Auto-closes after the first POST or CALLBACK_TIMEOUT_MS.
+function startCallback() {
+  return new Promise((resolve, reject) => {
+    const server = createServer((req, res) => {
+      const origin = req.headers.origin || "";
+      res.setHeader("access-control-allow-origin", origin || "*");
+      res.setHeader("access-control-allow-methods", "POST,OPTIONS");
+      res.setHeader("access-control-allow-headers", "content-type");
+      if (req.method === "OPTIONS") return res.writeHead(204).end();
+      if (req.method !== "POST" || !req.url.startsWith("/session")) {
+        return res.writeHead(404).end();
+      }
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        try {
+          const payload = JSON.parse(body);
+          res.writeHead(200, { "content-type": "application/json" }).end('{"ok":true}');
+          clearTimeout(timer);
+          server.close();
+          server.emit("session", payload);
+        } catch {
+          res.writeHead(400).end("invalid JSON");
+        }
+      });
+    });
+    const timer = setTimeout(() => {
+      server.close();
+      server.emit("session-error", new Error(`Setup timed out after ${CALLBACK_TIMEOUT_MS / 1000}s.`));
+    }, CALLBACK_TIMEOUT_MS);
+    server.listen(0, "127.0.0.1", () => {
+      const port = server.address().port;
+      const awaitSession = new Promise((res2, rej2) => {
+        server.once("session", res2);
+        server.once("session-error", rej2);
+      });
+      resolve({ port, awaitSession });
+    });
+    server.on("error", reject);
+  });
+}
+
+const server = new McpServer({ name: "agent-marketplace", version: "2.0.0" });
 
 server.tool(
   "search_try",
@@ -157,7 +176,7 @@ server.tool(
 
 server.tool(
   "search",
-  "Google SERP via agent-marketplace-proxy — $0.001 USDC per call on Base, paid automatically from a CDP-managed wallet (Coinbase enclave holds the key, never your disk). Unlimited. Run `wallet_setup` once if you haven't, then `wallet_info` to see the address + fund.",
+  "Google SERP via agent-marketplace-proxy — $0.001 USDC per call on Base. Paid automatically from the spender wallet authorized via `wallet_connect`. Run `wallet_connect` once if you haven't, then `wallet_info` to check balance and fund.",
   {
     q: z.string().describe("Search query"),
     location: z.string().default("United States"),
@@ -187,81 +206,80 @@ server.tool(
 );
 
 server.tool(
-  "wallet_setup",
-  "One-time setup for the CDP-managed buyer wallet. Get the three values from https://portal.cdp.coinbase.com/projects/api-keys — create an API Key (download JSON; you get `id` and `privateKey`) and a Wallet Secret (separate string). The skill creates a server-side EVM wallet under your CDP project; the private key never leaves Coinbase's enclave.",
-  {
-    cdp_api_key_id: z.string().describe("CDP API Key ID, looks like 'organizations/.../apiKeys/...'"),
-    cdp_api_key_secret: z.string().describe("CDP API Key Secret, the PEM block starting with -----BEGIN PRIVATE KEY-----"),
-    cdp_wallet_secret: z.string().describe("CDP Wallet Secret, separate from the API Key Secret (also from the portal)"),
-  },
-  async ({ cdp_api_key_id, cdp_api_key_secret, cdp_wallet_secret }) => {
-    let address;
+  "wallet_connect",
+  "One-time setup. Opens a browser-based flow that connects your Base Account (Coinbase Smart Wallet) and authorizes a scoped spender for this MCP. The spender can spend up to $20 USDC over 30 days, scoped to this app's revenue address. Revoke anytime via `wallet_info`.",
+  {},
+  async () => {
     try {
-      const { CdpClient } = await import("@coinbase/cdp-sdk");
-      const cdp = new CdpClient({
-        apiKeyId: cdp_api_key_id,
-        apiKeySecret: cdp_api_key_secret,
-        walletSecret: cdp_wallet_secret,
+      const { port, awaitSession } = await startCallback();
+      const callbackUrl = `http://127.0.0.1:${port}/session`;
+      const connectUrl = `${PROXY_URL}/wallet/connect?callback=${encodeURIComponent(callbackUrl)}`;
+      // Print the URL synchronously so the user can open it; then await the callback.
+      // Awaiting blocks the tool response until the user completes setup.
+      const printed = `Open this in your browser to set up your wallet:\n  ${connectUrl}\n\nThis MCP is listening on ${callbackUrl} and will save your session to ${SESSION_FILE} once you authorize.`;
+      console.error(`[wallet_connect] ${printed}`);
+
+      const session = await awaitSession;
+      // Validate payload shape.
+      if (
+        !session?.spenderPrivKey || !isHex(session.spenderPrivKey) ||
+        !session?.spenderAddress || !isAddress(session.spenderAddress) ||
+        !session?.account || !isAddress(session.account)
+      ) {
+        throw new Error("Invalid session payload from setup page");
+      }
+      writeSession({
+        spenderPrivKey: session.spenderPrivKey,
+        spenderAddress: session.spenderAddress,
+        account: session.account,
+        chainId: session.chainId,
+        permission: session.permission,
+        createdAt: session.createdAt || new Date().toISOString(),
       });
-      const account = await cdp.evm.getOrCreateAccount({ name: DEFAULT_ACCOUNT_NAME });
-      address = account.address;
-    } catch (e) {
+      _account = null; _walletClient = null; _fetchWithPay = null;
       return {
         content: [{ type: "text", text:
-          `CDP error: ${e?.message || e}\n\n` +
-          `Common causes:\n` +
-          `  - API key secret pasted with line breaks mangled (copy directly from the JSON file)\n` +
-          `  - Wallet Secret confused with API Key Secret (two separate strings)\n` +
-          `  - API key not enabled for the EVM scope (re-create with default scopes)\n`
+          `✓ Base Account connected: ${session.account}\n` +
+          `✓ Spender authorized:     ${session.spenderAddress}\n` +
+          `✓ Saved to ${SESSION_FILE} (chmod 600)\n\n` +
+          `Next: call wallet_info to see balance + fund link, then run any \`search\`.`
         }],
+      };
+    } catch (e) {
+      return {
+        content: [{ type: "text", text: `wallet_connect failed: ${e.message}` }],
         isError: true,
       };
     }
-    writeConfig({
-      cdpApiKeyId: cdp_api_key_id,
-      cdpApiKeySecret: cdp_api_key_secret,
-      cdpWalletSecret: cdp_wallet_secret,
-      accountName: DEFAULT_ACCOUNT_NAME,
-      address,
-      createdAt: new Date().toISOString(),
-    });
-    // Reset cached singletons so the next `search` call picks up the new creds.
-    _account = null;
-    _walletClient = null;
-    _fetchWithPay = null;
-    return {
-      content: [{ type: "text", text:
-        `✓ CDP authentication OK\n` +
-        `✓ Wallet created: ${address}\n` +
-        `✓ Saved to ${CONFIG_FILE} (chmod 600, no privkey on disk)\n\n` +
-        `Next: call wallet_info to see your address + balance, then fund via Apple Pay.`
-      }],
-    };
   },
 );
 
 server.tool(
   "wallet_info",
-  "Show your buyer wallet address (CDP-managed), current USDC balance, and how to fund. Run wallet_setup first if you haven't.",
+  "Show your spender wallet (Base Account-authorized), current USDC balance, and dashboard / fund links. Run wallet_connect first if you haven't.",
   {},
   async () => {
     try {
-      const { account } = await ensureWallet();
-      const bal = await usdcBalance(account.address);
+      const session = readSession();
+      if (!session?.spenderAddress) {
+        throw new SetupRequiredError("No session found. Run `wallet_connect` first.");
+      }
+      const bal = await usdcBalance(session.spenderAddress);
       const netLabel = NETWORK === "base-sepolia" ? "Base Sepolia (testnet)" : "Base (mainnet)";
-      const fundHint = NETWORK === "base-sepolia"
+      const dashboardUrl = `${PROXY_URL}/wallet?account=${session.account}&spender=${session.spenderAddress}`;
+      const fundUrl = NETWORK === "base-sepolia"
         ? `Free testnet USDC: <https://faucet.circle.com> (Base Sepolia).`
-        : `Fund with Apple Pay (Coinbase Onramp guest checkout — email + card, no ID for first $500):
-  ${PROXY_URL}/fund?addr=${account.address}&amount=5
-Or transfer existing USDC on Base directly to the address above (zero KYC).`;
-      const text = `Buyer wallet (CDP-managed — Coinbase enclave holds the key)
-  Address: ${account.address}
-  Network: ${netLabel}
-  Balance: ${bal} USDC
-  Config:  ${CONFIG_FILE} (chmod 600, no privkey)
+        : `${PROXY_URL}/fund?addr=${session.spenderAddress}&amount=5`;
+      const text = `Agent spender wallet (Base Account-authorized — you control via Coinbase passkey)
+  Base Account: ${session.account}
+  Spender:      ${session.spenderAddress}
+  Network:      ${netLabel}
+  Balance:      ${bal} USDC
+  Config:       ${SESSION_FILE} (chmod 600)
 
-Cost: $0.001 per \`search\` call → $1 covers ~1000 calls.
-${fundHint}`;
+Cost: $0.001 per \`search\` call → $5 covers ~5000 calls.
+Fund (Apple Pay): ${fundUrl}
+Manage / revoke: ${dashboardUrl}`;
       return { content: [{ type: "text", text }] };
     } catch (e) {
       return {
