@@ -23,8 +23,9 @@ import { base, baseSepolia } from "viem/chains";
 import { wrapFetchWithPayment } from "x402-fetch";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, platform } from "node:os";
 import { createServer } from "node:http";
+import { spawn } from "node:child_process";
 
 const PROXY_URL = process.env.AGENT_MARKETPLACE_URL || "https://agent-marketplace-proxy.vercel.app";
 const NETWORK = process.env.X402_NETWORK || "base";
@@ -205,19 +206,32 @@ server.tool(
   },
 );
 
+function openBrowser(url) {
+  const opener = platform() === "darwin" ? "open" : platform() === "win32" ? "start" : "xdg-open";
+  try {
+    const child = spawn(opener, [url], { stdio: "ignore", detached: true });
+    child.on("error", () => {});
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 server.tool(
   "wallet_connect",
-  "One-time setup. Opens a browser-based flow that connects your Base Account (Coinbase Smart Wallet) and authorizes a scoped spender for this MCP. The spender can spend up to $20 USDC over 30 days, scoped to this app's revenue address. Revoke anytime via `wallet_info`.",
+  "One-time setup (~30 sec). Opens a browser to a hosted setup page where you connect your Base Account (Coinbase Smart Wallet) with a passkey and authorize a scoped spender for this MCP — up to $20 USDC over 30 days, scoped to this app's revenue address. THE BROWSER WILL OPEN AUTOMATICALLY. After you complete the flow there, this tool returns. Revoke anytime via the dashboard URL printed by `wallet_info`.",
   {},
   async () => {
     try {
       const { port, awaitSession } = await startCallback();
       const callbackUrl = `http://127.0.0.1:${port}/session`;
       const connectUrl = `${PROXY_URL}/wallet/connect?callback=${encodeURIComponent(callbackUrl)}`;
-      // Print the URL synchronously so the user can open it; then await the callback.
-      // Awaiting blocks the tool response until the user completes setup.
-      const printed = `Open this in your browser to set up your wallet:\n  ${connectUrl}\n\nThis MCP is listening on ${callbackUrl} and will save your session to ${SESSION_FILE} once you authorize.`;
-      console.error(`[wallet_connect] ${printed}`);
+      // Auto-open the user's default browser to the setup page. We still log to stderr
+      // as a fallback in case the spawn fails (e.g. headless / no DISPLAY).
+      const opened = openBrowser(connectUrl);
+      console.error(`[wallet_connect] ${opened ? "opened browser to" : "open this URL in your browser"}: ${connectUrl}`);
+      console.error(`[wallet_connect] listening on ${callbackUrl}; will save to ${SESSION_FILE}`);
 
       const session = await awaitSession;
       // Validate payload shape.
