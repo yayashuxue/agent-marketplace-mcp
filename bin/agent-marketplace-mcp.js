@@ -17,10 +17,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod/v3";
-import { createWalletClient, http, createPublicClient, formatUnits, isAddress, isHex } from "viem";
+import { http, createPublicClient, formatUnits, isAddress, isHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
-import { wrapFetchWithPayment } from "x402-fetch";
+import { wrapFetchWithPaymentFromConfig } from "@x402/fetch";
+import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, platform } from "node:os";
@@ -39,12 +40,15 @@ const USDC = {
   "base-sepolia": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
 };
 
-let _walletClient = null;
 let _account = null;
 let _fetchWithPay = null;
 
 function chain() {
   return NETWORK === "base-sepolia" ? baseSepolia : base;
+}
+
+function caip2Network() {
+  return NETWORK === "base-sepolia" ? "eip155:84532" : "eip155:8453";
 }
 
 class SetupRequiredError extends Error {
@@ -87,8 +91,9 @@ async function ensureWallet() {
     );
   }
   _account = privateKeyToAccount(privKey);
-  _walletClient = createWalletClient({ account: _account, chain: chain(), transport: http() });
-  _fetchWithPay = wrapFetchWithPayment(fetch, _walletClient);
+  _fetchWithPay = wrapFetchWithPaymentFromConfig(fetch, {
+    schemes: [{ network: caip2Network(), client: new ExactEvmScheme(_account) }],
+  });
   return { fetchWithPay: _fetchWithPay, account: _account };
 }
 
@@ -250,7 +255,7 @@ server.tool(
         permission: session.permission,
         createdAt: session.createdAt || new Date().toISOString(),
       });
-      _account = null; _walletClient = null; _fetchWithPay = null;
+      _account = null; _fetchWithPay = null;
       return {
         content: [{ type: "text", text:
           `✓ Base Account connected: ${session.account}\n` +
