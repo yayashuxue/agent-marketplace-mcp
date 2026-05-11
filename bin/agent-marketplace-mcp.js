@@ -1,6 +1,19 @@
 #!/usr/bin/env node
 // agent-marketplace-mcp — MCP server exposing agent-marketplace-proxy as Claude/Cursor tools.
 //
+// Subcommand dispatch (must run BEFORE heavy MCP/viem imports so `init` boots fast and
+// without paying server-startup cost). npx with a github specifier always routes to the
+// package-name-matching bin even when argv requests a different bin name, so `npx -y
+// github:...mcp init` lands here with argv[2]==="init" — we forward to bin/init.mjs.
+if (process.argv[2] === "init") {
+  const { runInit } = await import("./init.mjs");
+  await runInit().then(() => process.exit(0)).catch((e) => {
+    process.stderr.write(`✗ init failed: ${e.message}\n`);
+    process.exit(1);
+  });
+}
+
+//
 // Wallet model (v2 — Base Account + Spend Permission, no CDP signup):
 //   - User opens a hosted setup page in their browser.
 //   - The page generates a fresh "spender" EOA (private key never leaves the browser tab),

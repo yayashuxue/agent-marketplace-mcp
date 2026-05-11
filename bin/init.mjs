@@ -97,7 +97,7 @@ function existingSessionSummary() {
   }
 }
 
-async function main() {
+export async function runInit() {
   const existing = existingSessionSummary();
   if (existing) {
     log(`agent-marketplace: session already exists for account ${existing.account}.`);
@@ -154,7 +154,16 @@ async function main() {
   log(`Dashboard: ${APP_URL}/dashboard?account=${session.account}&spender=${session.spenderAddress}`);
 }
 
-main().catch((e) => {
-  log(`✗ init failed: ${e.message}`);
-  process.exit(1);
-});
+// Auto-run only when this file is the process entry (i.e. invoked directly as the
+// registered `init` bin). When imported by agent-marketplace-mcp.js's subcommand
+// dispatch, the parent calls runInit() explicitly — we must NOT also run here, or
+// the listener boots twice.
+import { fileURLToPath } from "node:url";
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  runInit()
+    .then(() => process.exit(0))
+    .catch((e) => {
+      log(`✗ init failed: ${e.message}`);
+      process.exit(1);
+    });
+}
