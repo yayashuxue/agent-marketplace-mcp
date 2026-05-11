@@ -1,10 +1,11 @@
 {
   "name": "agent-marketplace-mcp",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "MCP server: x402-paid Google SERP + free trial. Base Account + Spend Permission — passkey-bound wallet, no signup. $0.001 USDC/call.",
   "type": "module",
   "bin": {
-    "agent-marketplace-mcp": "bin/agent-marketplace-mcp.js"
+    "agent-marketplace-mcp": "bin/agent-marketplace-mcp.js",
+    "init": "bin/init.mjs"
   },
   "files": [
     "bin/",
