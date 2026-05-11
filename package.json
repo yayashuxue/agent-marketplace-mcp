@@ -1,7 +1,7 @@
 {
   "name": "agent-marketplace-mcp",
-  "version": "2.0.4",
-  "description": "MCP server: x402-paid Google SERP + free trial. Base Account + Spend Permission — passkey-bound wallet, no signup. $0.001 USDC/call.",
+  "version": "2.1.0",
+  "description": "MCP server: x402-paid Google SERP + B2B email finder + email verifier (with free trials). Base Account + Spend Permission — passkey-bound wallet, no signup.",
   "type": "module",
   "bin": {
     "agent-marketplace-mcp": "bin/agent-marketplace-mcp.js",
@@ -19,6 +19,9 @@
     "smart-wallet",
     "spend-permission",
     "serp",
+    "email-finder",
+    "email-verifier",
+    "hunter.io",
     "agent",
     "claude",
     "cursor"

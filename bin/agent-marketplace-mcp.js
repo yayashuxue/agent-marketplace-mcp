@@ -169,8 +169,44 @@ function startCallback() {
   });
 }
 
-const server = new McpServer({ name: "agent-marketplace", version: "2.0.0" });
+const server = new McpServer({ name: "agent-marketplace", version: "2.1.0" });
 
+// Shared HTTP plumbing for the proxy. callTry is unauthenticated (free trials,
+// per-IP daily quota); callPaid wraps fetch with x402 payment from the
+// configured spender wallet. Both return the MCP `content` envelope directly.
+async function callTry(path, body) {
+  const r = await fetch(`${PROXY_URL}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const text = await r.text();
+  return {
+    content: [{ type: "text", text: r.ok ? text : `HTTP ${r.status}: ${text}` }],
+    isError: !r.ok,
+  };
+}
+
+async function callPaid(path, body) {
+  let fetchWithPay;
+  try {
+    ({ fetchWithPay } = await ensureWallet());
+  } catch (e) {
+    return { content: [{ type: "text", text: e.message }], isError: true };
+  }
+  const r = await fetchWithPay(`${PROXY_URL}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const text = await r.text();
+  return {
+    content: [{ type: "text", text: r.ok ? text : `HTTP ${r.status}: ${text}` }],
+    isError: !r.ok,
+  };
+}
+
+// ── SERP (DataForSEO) ────────────────────────────────────────────────────────
 server.tool(
   "search_try",
   "Free Google SERP via agent-marketplace-proxy — 5 calls per day, no wallet needed. Use this first to verify the API works for your use case before switching to paid `search`.",
@@ -179,18 +215,7 @@ server.tool(
     location: z.string().default("United States").describe("DataForSEO location_name"),
     num: z.number().int().default(10).describe("Top-N organic results, max 100"),
   },
-  async ({ q, location, num }) => {
-    const r = await fetch(`${PROXY_URL}/try`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ q, location, num }),
-    });
-    const text = await r.text();
-    return {
-      content: [{ type: "text", text: r.ok ? text : `HTTP ${r.status}: ${text}` }],
-      isError: !r.ok,
-    };
-  },
+  ({ q, location, num }) => callTry("/try", { q, location, num }),
 );
 
 server.tool(
@@ -201,27 +226,48 @@ server.tool(
     location: z.string().default("United States"),
     num: z.number().int().default(10),
   },
-  async ({ q, location, num }) => {
-    let fetchWithPay;
-    try {
-      ({ fetchWithPay } = await ensureWallet());
-    } catch (e) {
-      return {
-        content: [{ type: "text", text: `${e.message}` }],
-        isError: true,
-      };
-    }
-    const r = await fetchWithPay(`${PROXY_URL}/search`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ q, location, num }),
-    });
-    const text = await r.text();
-    return {
-      content: [{ type: "text", text: r.ok ? text : `HTTP ${r.status}: ${text}` }],
-      isError: !r.ok,
-    };
+  ({ q, location, num }) => callPaid("/search", { q, location, num }),
+);
+
+// ── B2B email finder + verifier (Hunter.io) ──────────────────────────────────
+server.tool(
+  "email_find_try",
+  "Free B2B email finder — 5 calls per day, no wallet needed. Given a company domain plus (optionally) a person's first/last name, returns the most likely email + confidence score. Backed by Hunter.io. Try this before switching to paid `email_find`.",
+  {
+    domain: z.string().describe("Company domain, e.g. stripe.com"),
+    first_name: z.string().optional().describe("(optional) target person's first name"),
+    last_name: z.string().optional().describe("(optional) target person's last name"),
   },
+  ({ domain, first_name, last_name }) => callTry("/try/email/find", { domain, first_name, last_name }),
+);
+
+server.tool(
+  "email_find",
+  "B2B email finder via agent-marketplace-proxy — $0.005 USDC per call on Base. Domain + name → most likely email + confidence score. Backed by Hunter.io. Paid from the spender wallet authorized via `wallet_connect`.",
+  {
+    domain: z.string().describe("Company domain, e.g. stripe.com"),
+    first_name: z.string().optional(),
+    last_name: z.string().optional(),
+  },
+  ({ domain, first_name, last_name }) => callPaid("/email/find", { domain, first_name, last_name }),
+);
+
+server.tool(
+  "email_verify_try",
+  "Free email deliverability verifier — 5 calls per day, no wallet needed. Returns deliverable/risky/undeliverable + score + signal flags (disposable, webmail, MX records, SMTP check). Backed by Hunter.io.",
+  {
+    email: z.string().describe("Email address to verify"),
+  },
+  ({ email }) => callTry("/try/email/verify", { email }),
+);
+
+server.tool(
+  "email_verify",
+  "Email deliverability verifier via agent-marketplace-proxy — $0.002 USDC per call on Base. Returns deliverable/risky/undeliverable + score + signal flags. Backed by Hunter.io. Paid from the spender wallet authorized via `wallet_connect`.",
+  {
+    email: z.string().describe("Email address to verify"),
+  },
+  ({ email }) => callPaid("/email/verify", { email }),
 );
 
 function openBrowser(url) {
