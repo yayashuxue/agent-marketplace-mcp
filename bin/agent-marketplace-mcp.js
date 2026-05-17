@@ -34,7 +34,10 @@ import { http, createPublicClient, formatUnits, isAddress, isHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
 import { wrapFetchWithPaymentFromConfig } from "@x402/fetch";
-import { ExactEvmScheme } from "@x402/evm/exact/client";
+import {
+  BatchSettlementEvmScheme,
+  FileClientChannelStorage,
+} from "@x402/evm/batch-settlement/client";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, platform } from "node:os";
@@ -104,8 +107,23 @@ async function ensureWallet() {
     );
   }
   _account = privateKeyToAccount(privKey);
+  // Y2 batch-settlement: this same EOA plays three roles for the cutover —
+  //   1. signer: signs the ERC-3009 deposit + EIP-712 vouchers
+  //   2. payer: holds the USDC and funds the channel via ERC-3009
+  //   3. payerAuthorizer: server validates voucher sigs against this address
+  // No raw-key removal yet (that's Y1, follow-up). User UX is unchanged from
+  // the B-bridge flow: refill the spender, calls just work.
+  const channelStorage = new FileClientChannelStorage({ directory: CONFIG_DIR });
   _fetchWithPay = wrapFetchWithPaymentFromConfig(fetch, {
-    schemes: [{ network: caip2Network(), client: new ExactEvmScheme(_account) }],
+    schemes: [
+      {
+        network: caip2Network(),
+        client: new BatchSettlementEvmScheme(_account, {
+          storage: channelStorage,
+          payerAuthorizer: _account.address,
+        }),
+      },
+    ],
   });
   return { fetchWithPay: _fetchWithPay, account: _account };
 }
